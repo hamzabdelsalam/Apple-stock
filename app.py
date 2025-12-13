@@ -7,7 +7,6 @@ import os
 import math
 import tensorflow as tf
 from tensorflow.keras.models import load_model
-from tensorflow.keras.layers import Layer # Required for Attention layer, if it was used (good to keep)
 from sklearn.preprocessing import MinMaxScaler
 from datetime import timedelta
 
@@ -19,26 +18,6 @@ st.set_page_config(
     layout="wide",
     page_icon="📈"
 )
-
-# A placeholder for the Attention layer in case your final model used it,
-# although it wasn't in the provided code, it's safer to include if you might
-# have trained a slightly different model.
-# If your model fails to load, try removing the `custom_objects` argument.
-class Attention(Layer):
-    def __init__(self, **kwargs):
-        super(Attention, self).__init__(**kwargs)
-    def build(self, input_shape):
-        self.W = self.add_weight(name='att_weight', shape=(input_shape[-1], input_shape[-1]), initializer='random_normal', trainable=True)
-        self.b = self.add_weight(name='att_bias', shape=(input_shape[-1],), initializer='zeros', trainable=True)
-        self.u = self.add_weight(name='att_u', shape=(input_shape[-1], 1), initializer='random_normal', trainable=True)
-        super(Attention, self).build(input_shape)
-    def call(self, inputs):
-        u_t = tf.tanh(tf.tensordot(inputs, self.W, axes=1) + self.b)
-        att = tf.nn.softmax(tf.tensordot(u_t, self.u, axes=1), axis=1)
-        output = tf.reduce_sum(inputs * att, axis=1)
-        return output
-        
-custom_objects = {'Attention': Attention}
 
 # ==========================================
 # 2. MODEL AND DATA LOADING
@@ -60,11 +39,11 @@ def load_all_assets():
     # Load Scaler
     scaler = joblib.load("minmax_scaler.pkl")
     
-    # Load Models
+    # Load Models (No custom objects needed for SimpleRNN, LSTM, GRU)
     models = {
-        'RNN': load_model("rnn_model.h5", custom_objects=custom_objects),
-        'LSTM': load_model("lstm_model.h5", custom_objects=custom_objects),
-        'GRU': load_model("gru_model.h5", custom_objects=custom_objects)
+        'RNN': load_model("rnn_model.h5"),
+        'LSTM': load_model("lstm_model.h5"),
+        'GRU': load_model("gru_model.h5")
     }
     
     # Load Metadata
@@ -73,16 +52,24 @@ def load_all_assets():
         seq_len = meta['seq_len']
         features_cols = meta['features_cols']
         scaled_data = meta['scaled_data_for_prediction']
-        last_date = meta['last_data_date']
+        # --- CRITICAL FIX: Loading last known date ---
+        last_date = meta.get('last_data_date') 
         
     return scaler, models, seq_len, features_cols, scaled_data, last_date
 
 try:
     scaler, models, SEQ_LEN, features_cols, scaled_data, last_known_date = load_all_assets()
+    
+    if last_known_date is None:
+        st.warning("Last known date not found in metadata. Using today's date as a placeholder.")
+        last_known_date = pd.to_datetime('today').date()
+    elif not isinstance(last_known_date, pd.Timestamp):
+        last_known_date = pd.to_datetime(last_known_date).date()
+        
     st.success(f"Models and data loaded. Last known data point: {last_known_date.strftime('%Y-%m-%d')}")
+    
 except Exception as e:
     st.error(f"Error during asset loading: {e}")
-    st.info("Check if your model files (e.g., rnn_model.h5) were created correctly and if the 'Attention' class is needed.")
     st.stop()
 
 # ==========================================
@@ -90,8 +77,7 @@ except Exception as e:
 # ==========================================
 def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_cols):
     
-    # 1. Get the last sequence from the loaded data
-    # Create a deep copy to avoid modifying the cached data
+    # 1. Get the last sequence from the loaded data (using a copy)
     temp_input = list(initial_scaled_data[-seq_len:].copy()) 
     lst_output = []
     i = 0
@@ -102,6 +88,7 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
     # 3. Predict day by day (Roll Forward)
     while i < n_days:
         if len(temp_input) > seq_len:
+            # Drop the oldest data point and keep the latest SEQ_LEN data points
             x_input = np.array(temp_input[1:])
         else:
             x_input = np.array(temp_input)
@@ -114,10 +101,7 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
         lst_output.append(y_pred_scaled[0])
         
         # --- Update the sequence for the next prediction ---
-        # Take the last known full feature vector
         next_feature_vector = temp_input[-1].copy()
-        
-        # Update the 'Close' value in the feature vector with the new prediction
         next_feature_vector[target_index] = y_pred_scaled[0]
         
         # Append the new vector to the sequence
@@ -141,7 +125,7 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
 # 4. STREAMLIT UI
 # ==========================================
 st.title("📈 Apple Stock Price Prediction with RNNs")
-st.markdown(f"Forecasting future **Close** prices based on the past {SEQ_LEN} days of market data.")
+st.markdown("Compare predictions from SimpleRNN, LSTM, and GRU models for the next few trading days.")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -153,7 +137,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Model Parameters")
     st.metric("Sequence Length (Time Steps)", SEQ_LEN)
-    st.metric("Input Features", f"{len(features_cols)} ({', '.join(features_cols)})")
+    st.metric("Number of Input Features", len(features_cols))
     st.info(f"The model uses the past **{SEQ_LEN} days** of data to predict the next day's Close price.")
 
 # --- MAIN DASHBOARD ---
@@ -169,6 +153,7 @@ if st.button(f"Generate Prediction for Next {n_days} Days ({model_choice})", typ
             model_to_use, n_days, scaled_data, SEQ_LEN, features_cols
         )
         
+        # --- CRITICAL FIX: Use the actual last known date ---
         # Generate prediction dates (starting one day after the last known date)
         prediction_dates = [last_known_date + timedelta(days=i + 1) for i in range(n_days)]
         
@@ -190,10 +175,10 @@ if st.button(f"Generate Prediction for Next {n_days} Days ({model_choice})", typ
             
             # Show conceptual diagram of the chosen RNN architecture
             if model_choice == 'GRU':
-                st.info("The GRU uses a Reset and an Update Gate to efficiently manage information flow.") 
+                st.info("The GRU uses a **Reset** and an **Update Gate** to efficiently manage information flow.") 
             elif model_choice == 'LSTM':
-                 st.info("The LSTM uses Input, Forget, and Output Gates to combat the vanishing gradient problem.") 
+                 st.info("The LSTM uses **Input, Forget, and Output Gates** to combat the vanishing gradient problem.") 
             elif model_choice == 'RNN':
-                 st.info("The Simple RNN processes sequences but often suffers from short-term memory.") 
+                 st.info("The Simple RNN processes sequences but often suffers from **short-term memory**.") 
 
         st.balloons()
