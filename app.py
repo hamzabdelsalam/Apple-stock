@@ -21,15 +21,13 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. MODEL AND DATA LOADING (FINAL CRITICAL FIX APPLIED)
+# 2. MODEL AND DATA LOADING
 # ==========================================
 @st.cache_resource
 def load_all_assets():
     st.write("Loading models and data...")
     
-    # --- FINAL FIX: Use string identifiers for metrics ---
-    # This is the most robust way to load models across different TensorFlow/Keras versions, 
-    # resolving the 'Could not deserialize' error by using built-in string references.
+    # --- FIX 1: Use string identifiers for metrics to bypass Keras deserialization errors ---
     custom_metrics = {
         'mse': 'mse', 
         'mae': 'mae', 
@@ -49,7 +47,7 @@ def load_all_assets():
     # Load Scaler
     scaler = joblib.load("minmax_scaler.pkl")
     
-    # Load Models (APPLYING THE FINAL FIX)
+    # Load Models (Applying the metric fix)
     models = {
         'RNN': load_model("rnn_model.h5", custom_objects=custom_metrics),
         'LSTM': load_model("lstm_model.h5", custom_objects=custom_metrics),
@@ -83,7 +81,7 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# 3. PREDICTION UTILITY FUNCTIONS
+# 3. PREDICTION UTILITY FUNCTIONS (FIXED RESHAPE LOGIC)
 # ==========================================
 def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_cols):
     
@@ -97,12 +95,15 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
         
     # 3. Predict day by day (Roll Forward)
     while i < n_days:
-        if len(temp_input) > seq_len:
-            x_input = np.array(temp_input[1:])
-        else:
-            x_input = np.array(temp_input)
-            
-        x_input = x_input.reshape(1, seq_len, len(features_cols))
+        
+        # --- FIX 2: Always take the last SEQ_LEN elements for the input sequence ---
+        # This prevents the ValueError by guaranteeing the size of the array before reshaping.
+        current_sequence = np.array(temp_input[-seq_len:]) 
+        
+        # Reshape for the RNN model (1, seq_len, n_features)
+        x_input = current_sequence.reshape(1, seq_len, len(features_cols))
+        
+        # Predict the next CLOSE price (which is scaled)
         y_pred_scaled = model.predict(x_input, verbose=0)[0] 
         lst_output.append(y_pred_scaled[0])
         
