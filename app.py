@@ -9,7 +9,7 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
 from datetime import timedelta
-from tensorflow.keras.layers import Layer # Included for completeness/safety
+from tensorflow.keras.layers import Layer 
 
 # ==========================================
 # 1. SETUP & CONFIGURATION
@@ -21,19 +21,19 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. MODEL AND DATA LOADING (CRITICAL FIX APPLIED)
+# 2. MODEL AND DATA LOADING (FINAL CRITICAL FIX APPLIED)
 # ==========================================
 @st.cache_resource
 def load_all_assets():
     st.write("Loading models and data...")
     
-    # --- FIX: Define custom_objects for common metrics ---
-    # This resolves the 'Could not deserialize' error by explicitly mapping the metrics.
+    # --- FINAL FIX: Use string identifiers for metrics ---
+    # This is the most robust way to load models across different TensorFlow/Keras versions, 
+    # resolving the 'Could not deserialize' error by using built-in string references.
     custom_metrics = {
-        'mse': tf.keras.metrics.mean_squared_error,
-        'mae': tf.keras.metrics.mean_absolute_error,
-        # Add the 'Layer' component here if your models used a custom layer like Attention
-        # 'Attention': Attention 
+        'mse': 'mse', 
+        'mae': 'mae', 
+        # Add other custom components if they were used (e.g., 'Attention': Attention)
     }
     
     # Check for required files
@@ -49,7 +49,7 @@ def load_all_assets():
     # Load Scaler
     scaler = joblib.load("minmax_scaler.pkl")
     
-    # Load Models (APPLYING THE FIX)
+    # Load Models (APPLYING THE FINAL FIX)
     models = {
         'RNN': load_model("rnn_model.h5", custom_objects=custom_metrics),
         'LSTM': load_model("lstm_model.h5", custom_objects=custom_metrics),
@@ -69,7 +69,7 @@ def load_all_assets():
 try:
     scaler, models, SEQ_LEN, features_cols, scaled_data, last_known_date = load_all_assets()
     
-    # Ensure date is in the correct format
+    # Ensure date is correctly formatted
     if last_known_date is None:
         last_known_date = pd.to_datetime('today').date()
     elif not isinstance(last_known_date, pd.Timestamp) and not isinstance(last_known_date, pd.DatetimeIndex):
@@ -79,7 +79,7 @@ try:
     
 except Exception as e:
     st.error(f"Error during asset loading: {e}")
-    st.info("Check TensorFlow versions between your training environment and Streamlit Cloud, or ensure the required models and metadata are present.")
+    st.info("The model failed to load. Please ensure all model files and metadata are present and try updating TensorFlow/Keras versions.")
     st.stop()
 
 # ==========================================
