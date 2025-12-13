@@ -9,6 +9,7 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
 from datetime import timedelta
+from tensorflow.keras.layers import Layer # Included for completeness/safety
 
 # ==========================================
 # 1. SETUP & CONFIGURATION
@@ -20,11 +21,20 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. MODEL AND DATA LOADING
+# 2. MODEL AND DATA LOADING (CRITICAL FIX APPLIED)
 # ==========================================
 @st.cache_resource
 def load_all_assets():
     st.write("Loading models and data...")
+    
+    # --- FIX: Define custom_objects for common metrics ---
+    # This resolves the 'Could not deserialize' error by explicitly mapping the metrics.
+    custom_metrics = {
+        'mse': tf.keras.metrics.mean_squared_error,
+        'mae': tf.keras.metrics.mean_absolute_error,
+        # Add the 'Layer' component here if your models used a custom layer like Attention
+        # 'Attention': Attention 
+    }
     
     # Check for required files
     required_files = [
@@ -39,11 +49,11 @@ def load_all_assets():
     # Load Scaler
     scaler = joblib.load("minmax_scaler.pkl")
     
-    # Load Models (No custom objects needed for SimpleRNN, LSTM, GRU)
+    # Load Models (APPLYING THE FIX)
     models = {
-        'RNN': load_model("rnn_model.h5"),
-        'LSTM': load_model("lstm_model.h5"),
-        'GRU': load_model("gru_model.h5")
+        'RNN': load_model("rnn_model.h5", custom_objects=custom_metrics),
+        'LSTM': load_model("lstm_model.h5", custom_objects=custom_metrics),
+        'GRU': load_model("gru_model.h5", custom_objects=custom_metrics)
     }
     
     # Load Metadata
@@ -52,7 +62,6 @@ def load_all_assets():
         seq_len = meta['seq_len']
         features_cols = meta['features_cols']
         scaled_data = meta['scaled_data_for_prediction']
-        # --- CRITICAL FIX: Loading last known date ---
         last_date = meta.get('last_data_date') 
         
     return scaler, models, seq_len, features_cols, scaled_data, last_date
@@ -60,16 +69,17 @@ def load_all_assets():
 try:
     scaler, models, SEQ_LEN, features_cols, scaled_data, last_known_date = load_all_assets()
     
+    # Ensure date is in the correct format
     if last_known_date is None:
-        st.warning("Last known date not found in metadata. Using today's date as a placeholder.")
         last_known_date = pd.to_datetime('today').date()
-    elif not isinstance(last_known_date, pd.Timestamp):
+    elif not isinstance(last_known_date, pd.Timestamp) and not isinstance(last_known_date, pd.DatetimeIndex):
         last_known_date = pd.to_datetime(last_known_date).date()
         
     st.success(f"Models and data loaded. Last known data point: {last_known_date.strftime('%Y-%m-%d')}")
     
 except Exception as e:
     st.error(f"Error during asset loading: {e}")
+    st.info("Check TensorFlow versions between your training environment and Streamlit Cloud, or ensure the required models and metadata are present.")
     st.stop()
 
 # ==========================================
@@ -88,35 +98,25 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
     # 3. Predict day by day (Roll Forward)
     while i < n_days:
         if len(temp_input) > seq_len:
-            # Drop the oldest data point and keep the latest SEQ_LEN data points
             x_input = np.array(temp_input[1:])
         else:
             x_input = np.array(temp_input)
             
-        # Reshape for the RNN model (1, seq_len, n_features)
         x_input = x_input.reshape(1, seq_len, len(features_cols))
-        
-        # Predict the next CLOSE price (which is scaled)
         y_pred_scaled = model.predict(x_input, verbose=0)[0] 
         lst_output.append(y_pred_scaled[0])
         
         # --- Update the sequence for the next prediction ---
         next_feature_vector = temp_input[-1].copy()
         next_feature_vector[target_index] = y_pred_scaled[0]
-        
-        # Append the new vector to the sequence
         temp_input.append(next_feature_vector)
         i += 1
         
     # 4. Inverse transform the predicted 'Close' prices
-    # Create a dummy array filled with 0s, with the predicted Close prices in the target column
     prediction_dummy = np.zeros((n_days, len(features_cols)))
     prediction_dummy[:, target_index] = lst_output
     
-    # Inverse transform the dummy array
     inversed_prediction_data = scaler.inverse_transform(prediction_dummy)
-    
-    # Extract only the inverse transformed Close price
     final_predictions = inversed_prediction_data[:, target_index]
     
     return final_predictions.tolist()
@@ -153,7 +153,6 @@ if st.button(f"Generate Prediction for Next {n_days} Days ({model_choice})", typ
             model_to_use, n_days, scaled_data, SEQ_LEN, features_cols
         )
         
-        # --- CRITICAL FIX: Use the actual last known date ---
         # Generate prediction dates (starting one day after the last known date)
         prediction_dates = [last_known_date + timedelta(days=i + 1) for i in range(n_days)]
         
