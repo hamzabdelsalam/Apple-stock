@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+tensorflow
+scikit-learn
+nltk # Still included just in case
+joblib
+kagglehub # <--- CRITICAL NEW REQUIREMENT
