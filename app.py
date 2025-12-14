@@ -117,13 +117,3 @@ else:
             """
         )
 
-### How to Run the GUI
-
-1.  **Ensure you ran Step 1** in your notebook to create `comparison_results.csv`.
-2.  Save the code above as `app.py`.
-3.  Open your terminal in the directory where you saved the file and run:
-    ```bash
-    streamlit run app.py
-    ```
-
-Would you like to extend this GUI to include a **Prediction Tab** where users can input a model and number of days to forecast, using the pipeline-trained model?
