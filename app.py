@@ -5,22 +5,24 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import MinMaxScaler
-import joblib # For saving the scaler (optional but good practice)
+from sklearn.model_selection import train_test_split # Used for splitting sequences
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 
-# --- Define the URL for the raw CSV data (Using a public source as a workaround for KaggleHub) ---
-# NOTE: Replace this URL with your own CSV file hosted publicly if needed.
-DATA_URL = "https://raw.githubusercontent.com/datasets/finance-data/main/apple_stock.csv"
+# --- Define the URL for the raw CSV data (Verified public source) ---
+DATA_URL = "https://raw.githubusercontent.com/mwitiderrick/stockmarket/master/AAPL.csv" 
 
 # ==========================================
 # 1. SETUP & CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Apple Stock Data Analyzer & Preprocessor", 
+    page_title="Apple Stock Data Analyzer & LSTM Model", 
     page_icon="🍎",
     layout="wide"
 )
 
-# --- The Core Sequence Data Preprocessing Function ---
+# --- Core Sequence Data Preprocessing Function ---
 def prepare_sequence_data(data_array: np.ndarray, seq_len: int):
     """
     Transforms a 2D numpy array into sequence data (X) and a target (y).
@@ -31,7 +33,7 @@ def prepare_sequence_data(data_array: np.ndarray, seq_len: int):
     n_samples = len(data_array)
     
     if data_array.shape[1] < 2:
-        st.error("Data must have at least two columns: one feature and one target.")
+        # This will only happen if the data is only one column, which is unlikely for stock data
         return np.array([]), np.array([])
 
     for i in range(seq_len, n_samples):
@@ -47,7 +49,7 @@ def prepare_sequence_data(data_array: np.ndarray, seq_len: int):
 
 
 # ==========================================
-# 2. DATA LOADING, SCALING, & PREPROCESSING
+# 2. DATA LOADING & SCALING
 # ==========================================
 @st.cache_data
 def load_and_scale_data(data_url):
@@ -58,7 +60,7 @@ def load_and_scale_data(data_url):
     try:
         df = pd.read_csv(data_url)
         
-        # Basic cleaning and date parsing for stock data
+        # Basic cleaning and date parsing
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
@@ -73,10 +75,10 @@ def load_and_scale_data(data_url):
             
         # --- Data Scaling ---
         scaler = MinMaxScaler(feature_range=(0, 1))
-        # Fit the scaler to all numeric data
+        # Fit the scaler to all numeric data and transform
         scaled_data = scaler.fit_transform(df_numeric)
         
-        # Convert back to DataFrame for easy column management
+        # Convert back to DataFrame
         df_scaled = pd.DataFrame(scaled_data, columns=df_numeric.columns, index=df_numeric.index)
         
         st.success("🍎 Data loaded, cleaned, and scaled successfully!")
@@ -87,100 +89,116 @@ def load_and_scale_data(data_url):
         return None, None
 
 # ==========================================
-# 3. STREAMLIT APP LAYOUT & LOGIC
+# 3. LSTM MODEL BUILD & TRAIN
+# ==========================================
+def build_and_train_model(X_train, y_train, units=50, dropout=0.2, epochs=50, batch_size=32):
+    """
+    Builds and trains a simple LSTM model.
+    """
+    # X_train shape is (N_samples, seq_len, N_features). N_features is the last dimension.
+    n_features = X_train.shape[2] 
+    seq_len = X_train.shape[1]
+    
+    # 1. Build the model
+    model = Sequential([
+        LSTM(units=units, return_sequences=True, input_shape=(seq_len, n_features)),
+        Dropout(dropout),
+        LSTM(units=units),
+        Dropout(dropout),
+        Dense(1) # Output layer for a single prediction (the next 'Close' price)
+    ])
+
+    # 2. Compile the model
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    
+    st.subheader("LSTM Model Architecture")
+    st.text(model.summary())
+    
+    # 3. Train the model
+    with st.spinner("Training LSTM model... this may take a moment."):
+        history = model.fit(
+            X_train, y_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_split=0.1, # Use 10% of the training data for validation
+            verbose=0 # Suppress verbose output in Streamlit
+        )
+    st.success("🎉 LSTM Model Training Complete!")
+    return model, history
+
+
+# ==========================================
+# 4. STREAMLIT APP LAYOUT & LOGIC
 # ==========================================
 
 # --- Load Data and Scaler ---
 df_scaled, scaler = load_and_scale_data(DATA_URL)
 
 if df_scaled is None or df_scaled.empty:
-    st.warning("Could not load and process data. Check the data source or your connection.")
+    st.warning("Could not load and process data. Check the data source.")
 else:
     # --- Sidebar Configuration ---
     st.sidebar.header("Configuration")
     
-    # 1. Sequence Length Input
+    # Sequence Length Input
     max_seq_len = len(df_scaled) - 1
     seq_len = st.sidebar.slider(
-        "Select Sequence Length (Look-back Steps)",
-        min_value=1,
-        max_value=min(max_seq_len, 30),
-        value=10,
-        step=1,
-        help="The number of historical time steps to include in each feature sample (X)."
+        "Sequence Length (Timesteps)",
+        min_value=1, max_value=min(max_seq_len, 30), value=10, step=1
     )
     
-    # 2. Target Column Selection
+    # Target Column Selection
     target_column = st.sidebar.selectbox(
-        "Select Target Column (y)",
+        "Target Column (y)",
         options=df_scaled.columns,
-        index=df_scaled.columns.get_loc('Close') if 'Close' in df_scaled.columns else 0,
-        help="This column will be used as the prediction target (y)."
+        index=df_scaled.columns.get_loc('Close') if 'Close' in df_scaled.columns else 0
     )
     
-    # --- Main Content ---
+    # Model Hyperparameters
+    st.sidebar.subheader("Model Parameters")
+    train_ratio = st.sidebar.slider("Train Split (%)", 50, 90, 80, 5) / 100
+    epochs = st.sidebar.slider("Training Epochs", 5, 100, 25, 5)
     
-    st.header("📊 Scaled Stock Data Overview")
-    st.write(f"Scaled Dataset Shape: **{df_scaled.shape}**")
-    st.dataframe(df_scaled.tail())
-    
-    # Plotting the target column
-    st.subheader(f"Time Series Plot: Scaled {target_column} Price (0 to 1)")
-    fig, ax = plt.subplots(figsize=(10, 4))
-    df_scaled[target_column].plot(ax=ax, title=f'Scaled {target_column} Price Over Time')
-    st.pyplot(fig)
-    
-    
-    st.header("⚙️ Sequence Data Preparation")
-    
-    # 1. Prepare the input data array: Move target column to the end
+    # --- Prepare Sequence Data (X, y) ---
     feature_cols = [col for col in df_scaled.columns if col != target_column]
     df_reordered = df_scaled[feature_cols + [target_column]]
     data_array = df_reordered.values
     
-    # 2. Process Data
-    if len(data_array) < seq_len + 1:
-        st.error(f"Data is too short. Requires at least {seq_len + 1} rows to create one sample with seq_len={seq_len}. Current rows: {len(data_array)}")
-    else:
-        X, y = prepare_sequence_data(data_array, seq_len)
+    X, y = prepare_sequence_data(data_array, seq_len)
+    
+    if X.size > 0:
+        # --- Split Data into Train/Test ---
+        # NOTE: For time series, shuffle MUST be False to preserve chronological order
+        split_index = int(train_ratio * len(X))
+        X_train, X_test = X[:split_index], X[split_index:]
+        y_train, y_test = y[:split_index], y[split_index:]
         
-        st.success(f"✅ Data successfully scaled and transformed with seq_len **{seq_len}**!")
-        
-        st.subheader("Results Summary")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.info("**Feature Data (X)**")
-            st.write(f"**Shape:** `{X.shape}`")
-            st.markdown(
-                f"""
-                * $X$ is the input sequence.
-                * **Shape:** $(\\text{{N}}_{{\\text{{samples}}}}, {seq_len}, \\text{{N}}_{{\\text{{features}}}})$
-                """
-            )
-        
-        with col2:
-            st.info("**Target Data (y)**")
-            st.write(f"**Shape:** `{y.shape}`")
-            st.markdown(
-                """
-                * $y$ is the predicted next value (scaled).
-                * **Shape:** $(\\text{{N}}_{{\\text{{samples}}}},)$
-                """
-            )
+        st.subheader("Data Split Summary")
+        col_x, col_y = st.columns(2)
+        col_x.metric("Training Samples (X_train)", X_train.shape[0])
+        col_y.metric("Testing Samples (X_test)", X_test.shape[0])
+        st.caption(f"Data split chronologically ({int(train_ratio*100)}% Train / {int((1-train_ratio)*100)}% Test)")
 
-        st.subheader("Example of First Sample")
+        # --- Train Model ---
+        model, history = build_and_train_model(X_train, y_train, epochs=epochs)
         
-        # Display the first sample sequence (X[0])
-        st.code(f"X[0] (Historical sequence of scaled features):", language='text')
-        st.dataframe(
-            pd.DataFrame(X[0], 
-                         columns=feature_cols,
-                         index=[f't-{seq_len-i}' for i in range(seq_len)])
-        )
+        # --- Plot Training History ---
+        st.subheader("Training Loss History")
+        fig_loss, ax_loss = plt.subplots()
+        ax_loss.plot(history.history['loss'], label='Train Loss')
+        ax_loss.plot(history.history['val_loss'], label='Validation Loss')
+        ax_loss.set_title("Model Loss")
+        ax_loss.set_xlabel("Epoch")
+        ax_loss.set_ylabel("Mean Squared Error (MSE)")
+        ax_loss.legend()
+        st.pyplot(fig_loss)
         
-        # Display the target (y[0])
-        st.code(f"y[0] (The scaled target value):", language='text')
-        st.write(f"**{y[0]:.6f}** (Scaled {target_column})")
+        # --- Evaluation and Prediction Placeholder ---
+        st.header("5. Model Evaluation")
         
-        st.caption("The sequence data is now ready for training a Recurrent Neural Network (RNN) or LSTM.")
+        # NOTE: The actual prediction and inverse transform logic is more complex 
+        # for a multi-variate model and would require an additional function.
+        st.info("The model is trained! The next steps would involve predicting on the test set, inverse transforming the predictions, and calculating metrics like RMSE.")
+        
+    else:
+        st.error("Not enough data to create sequences with the current sequence length.")
