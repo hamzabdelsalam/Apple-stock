@@ -6,22 +6,20 @@ import pickle
 import os
 from datetime import timedelta
 import matplotlib.pyplot as plt
-import seaborn as sns
 from tensorflow.keras.models import load_model
 
 # ==========================================
 # 1. SETUP & CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Apple Stock Prediction Dashboard (All Models)",
+    page_title="Apple Stock Price Forecast (RNN/LSTM/GRU)",
     layout="wide",
-    page_icon="📈"
+    page_icon="🔮"
 )
 
 # Define file paths
 SCALER_FILE = "minmax_scaler.pkl"
 META_FILE = "metadata.pkl"
-RESULTS_FILE = "comparison_results.csv"
 MODEL_FILES = {
     'RNN': "rnn_model.h5",
     'LSTM': "lstm_model.h5",
@@ -29,19 +27,23 @@ MODEL_FILES = {
 }
 CUSTOM_OBJECTS = {'mse': 'mse', 'mae': 'mae'} # For Keras loading fix
 
+# ==========================================
+# 2. MODEL AND DATA LOADING
+# ==========================================
 
 @st.cache_resource
 def load_prediction_assets():
     """Loads all models, scaler, and metadata."""
-
     
-    # 1. Check for required files
-    required_files = list(MODEL_FILES.values()) + [SCALER_FILE, META_FILE, RESULTS_FILE]
+    # 1. Check for required files (Removed RESULTS_FILE dependency)
+    required_files = list(MODEL_FILES.values()) + [SCALER_FILE, META_FILE]
     for f in required_files:
         if not os.path.exists(f):
-            st.error(f"Missing required file: {f}. Please run the export script in the notebook.")
+            st.error(f"Missing required file: {f}. Please ensure you ran the export script in the notebook.")
             st.stop()
             
+    st.info("Loading models: RNN, LSTM, GRU...")
+    
     # 2. Load Models
     models = {}
     for name, path in MODEL_FILES.items():
@@ -54,18 +56,15 @@ def load_prediction_assets():
     with open(META_FILE, "rb") as f:
         meta = pickle.load(f)
         
-    # 5. Load Comparison Data
-    comparison_df = pd.read_csv(RESULTS_FILE)
-    
-    return scaler, models, meta, comparison_df
+    return scaler, models, meta
 
 try:
-    SCALER, MODELS, META, comparison_df = load_prediction_assets()
+    SCALER, MODELS, META = load_prediction_assets()
     SEQ_LEN = META['seq_len']
     FEATURES_COLS = META['features_cols']
     SCALED_DATA = META['scaled_data_for_prediction']
     LAST_KNOWN_DATE = pd.to_datetime(META['last_data_date']).date()
-    st.success(f"All 3 models and data loaded successfully. Last known date: {LAST_KNOWN_DATE}")
+    st.success(f"All 3 models and data loaded successfully. Last known data point: {LAST_KNOWN_DATE}")
     PREDICTION_READY = True
 except Exception as e:
     st.error(f"Fatal Error during asset loading: {e}")
@@ -84,6 +83,7 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
     for i in range(n_days):
         
         current_sequence = np.array(temp_input[-seq_len:]) 
+        # Reshape for Keras (1, sequence_length, number_of_features)
         x_input = current_sequence.reshape(1, seq_len, len(features_cols))
         y_pred_scaled = model.predict(x_input, verbose=0)[0] 
         lst_output.append(y_pred_scaled[0])
@@ -102,67 +102,29 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
     
     return final_predictions.tolist()
 
+# ==========================================
+# 4. STREAMLIT UI (Prediction Focus)
+# ==========================================
 
-# --- Create Tabs ---
-tab1, tab2 = st.tabs(["📊 Performance Analysis", "🔮 Live Prediction"])
+st.title("🔮 Apple Stock Price Forecast (RNN, LSTM, GRU)")
+st.markdown("Select a recurrent model and the forecast horizon to see projected Close prices for Apple stock.")
 
-# --- Tab 1: Performance Analysis ---
-with tab1:
-    st.title("📊 Model Workflow Comparison")
-    st.markdown("Review of the Mean Absolute Error (MAE) achieved by different RNN models using Manual vs. Scikit-learn Pipeline preprocessing.")
-
-    col_chart, col_table = st.columns([2, 1])
-
-    with col_chart:
-        st.subheader("MAE Comparison Chart")
-        
-        # Recreate the comparison bar plot
-        fig, ax = plt.subplots(figsize=(10, 6))
-        x = np.arange(len(comparison_df["Model"]))
-        width = 0.35
-
-        plt.bar(x - width/2, comparison_df["Manual MAE"], width, label="Manual Preprocessing", color='#1f77b4')
-        plt.bar(x + width/2, comparison_df["Pipeline MAE"], width, label="End-to-End Pipeline", color='#ff7f0e')
-
-        plt.xticks(x, comparison_df["Model"])
-        plt.ylabel("Mean Absolute Error (MAE)")
-        plt.title("Manual vs Pipeline Model Performance Comparison")
-        plt.legend()
-        plt.grid(axis='y', linestyle='--', alpha=0.7)
-        st.pyplot(fig) 
-
-    with col_table:
-        st.subheader("Error Summary")
-        st.dataframe(
-            comparison_df.style.format({"Manual MAE": "{:.4f}", "Pipeline MAE": "{:.4f}"}),
-            use_container_width=True
-        )
-        
-        best_mae = min(comparison_df["Manual MAE"].min(), comparison_df["Pipeline MAE"].min())
-        st.info(f"**Overall Best MAE:** {best_mae:.4f}")
-        st.markdown(
-            """
-            ### Methodology
-            The **End-to-End Pipeline** uses Scikit-learn's `ColumnTransformer` and `Pipeline`  to ensure that scaling is consistently and correctly applied to all feature columns before training.
-            """
-        )
-            
-# --- Tab 2: Live Prediction ---
-with tab2:
-    st.title("🔮 Live Stock Price Forecasting")
-    st.markdown(f"Forecasting the next few days using your choice of model (Last data point: **{LAST_KNOWN_DATE}**).")
+# --- SIDEBAR ---
+with st.sidebar:
+    st.header("Prediction Settings")
+    model_choice = st.selectbox("Select Model:", list(MODELS.keys()))
+    n_days = st.slider("Days to Predict Forward:", min_value=1, max_value=30, value=7)
     
-    with st.sidebar:
-        st.header("Prediction Settings")
-        model_choice = st.selectbox("Select Model:", list(MODELS.keys()))
-        n_days = st.slider("Days to Predict Forward:", min_value=1, max_value=30, value=7)
-        
-        st.markdown("---")
-        st.subheader("Model Parameters")
-        st.metric("Sequence Length", SEQ_LEN)
-        st.metric("Input Features", len(FEATURES_COLS))
+    st.markdown("---")
+    st.subheader("Model Parameters")
+    st.metric("Sequence Length (Days)", SEQ_LEN)
+    st.metric("Number of Input Features", len(FEATURES_COLS))
+    st.info(f"The model uses the past **{SEQ_LEN} days** of data to predict the next day's Close price.")
 
-    if st.button(f"Generate Forecast for Next {n_days} Days ({model_choice})", type="primary"):
+# --- MAIN DASHBOARD ---
+if PREDICTION_READY:
+    
+    if st.button(f"Generate Forecast for Next {n_days} Days using {model_choice}", type="primary"):
         
         model_to_use = MODELS[model_choice]
         
@@ -171,6 +133,7 @@ with tab2:
                 model_to_use, n_days, SCALED_DATA, SEQ_LEN, FEATURES_COLS, SCALER
             )
             
+            # Generate prediction dates (starting one day after the last known date)
             prediction_dates = [LAST_KNOWN_DATE + timedelta(days=i + 1) for i in range(n_days)]
             
             predictions_df = pd.DataFrame({
@@ -191,4 +154,8 @@ with tab2:
             st.info(f"The prediction starts one day after the last known data point: {LAST_KNOWN_DATE}")
 
         st.balloons()
-
+        
+        # Display structural info about the chosen model type
+        st.markdown("---")
+        st.subheader(f"Understanding the {model_choice} Architecture")
+        if
