@@ -7,4 +7,5 @@ nltk # Still included just in case
 joblib
 matplotlib
 kagglehub 
+seaborn
 
