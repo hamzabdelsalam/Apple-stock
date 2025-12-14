@@ -1,184 +1,142 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
-import pickle
-import os
-import math
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from sklearn.preprocessing import MinMaxScaler
-from datetime import timedelta
-from tensorflow.keras.layers import Layer 
 
-# ==========================================
-# 1. SETUP & CONFIGURATION
-# ==========================================
+# --- 1. The Core Data Preprocessing Function ---
+
+# This function is the equivalent of your sequence_pipeline_stage
+def prepare_sequence_data(data_array: np.ndarray, seq_len: int):
+    """
+    Transforms a 2D numpy array into sequence data (X) and a target (y).
+    X will contain data from the past 'seq_len' steps (excluding the last column).
+    y will contain the current step's target value (the last column).
+
+    Args:
+        data_array: A 2D numpy array (e.g., [n_samples, n_features]).
+        seq_len: The look-back sequence length.
+
+    Returns:
+        A tuple (X, y) of numpy arrays.
+        X shape: (n_samples - seq_len, seq_len, n_features - 1)
+        y shape: (n_samples - seq_len,)
+    """
+    X, y = [], []
+    n_samples = len(data_array)
+    
+    # Start loop from the first index that can form a complete sequence
+    for i in range(seq_len, n_samples):
+        # X: data from i - seq_len up to i (exclusive), for all columns except the last one
+        X.append(data_array[i-seq_len:i, :-1]) 
+        # y: the target value at index i (the last column)
+        y.append(data_array[i, -1]) 
+    
+    return np.array(X), np.array(y)
+
+
+# --- 2. Streamlit GUI Layout ---
+
 st.set_page_config(
-    page_title="Apple Stock Price Prediction (RNN)",
-    layout="wide",
-    page_icon="📈"
+    page_title="Sequence Data Preparation Tool",
+    layout="wide"
 )
 
-# ==========================================
-# 2. MODEL AND DATA LOADING
-# ==========================================
-@st.cache_resource
-def load_all_assets():
-    st.write("Loading models and data...")
-    
-    # --- FIX 1: Use string identifiers for metrics to bypass Keras deserialization errors ---
-    custom_metrics = {
-        'mse': 'mse', 
-        'mae': 'mae', 
-        # Add other custom components if they were used (e.g., 'Attention': Attention)
-    }
-    
-    # Check for required files
-    required_files = [
-        "minmax_scaler.pkl", "rnn_model.h5", "lstm_model.h5", 
-        "gru_model.h5", "metadata.pkl"
-    ]
-    for f in required_files:
-        if not os.path.exists(f):
-            st.error(f"Missing file: {f}. Please run the export script in the notebook.")
-            st.stop()
+st.title("🔗 Sequence Data Preparation Tool")
+st.markdown("Use this tool to transform time-series data into the $X$ (features) and $y$ (target) format required for sequence models (e.g., LSTMs, RNNs).")
+
+
+# --- Sidebar for User Input ---
+st.sidebar.header("Configuration")
+
+# 1. Sequence Length Input
+seq_len = st.sidebar.slider(
+    "Select Sequence Length (Look-back Steps)",
+    min_value=1,
+    max_value=20,
+    value=5,
+    step=1,
+    help="The number of historical time steps to include in each feature sample (X)."
+)
+
+# 2. File Uploader
+uploaded_file = st.sidebar.file_uploader(
+    "Upload a CSV File",
+    type=["csv"],
+    help="The last column of your CSV will be treated as the target (y)."
+)
+
+
+if uploaded_file is not None:
+    try:
+        # Read the file using pandas
+        df = pd.read_csv(uploaded_file)
+        st.subheader("1. Raw Data Preview")
+        st.dataframe(df.head())
+        
+        # Convert DataFrame to numpy array for processing
+        data_array = df.values
+        
+        # Check if the data is large enough for the chosen sequence length
+        if len(data_array) < seq_len + 1:
+            st.error(f"Data is too short. Requires at least {seq_len + 1} rows to create one sample with seq_len={seq_len}. Current rows: {len(data_array)}")
+        else:
+            # --- 3. Process Data ---
+            X, y = prepare_sequence_data(data_array, seq_len)
             
-    # Load Scaler
-    scaler = joblib.load("minmax_scaler.pkl")
-    
-    # Load Models (Applying the metric fix)
-    models = {
-        'RNN': load_model("rnn_model.h5", custom_objects=custom_metrics),
-        'LSTM': load_model("lstm_model.h5", custom_objects=custom_metrics),
-        'GRU': load_model("gru_model.h5", custom_objects=custom_metrics)
-    }
-    
-    # Load Metadata
-    with open("metadata.pkl", "rb") as f:
-        meta = pickle.load(f)
-        seq_len = meta['seq_len']
-        features_cols = meta['features_cols']
-        scaled_data = meta['scaled_data_for_prediction']
-        last_date = meta.get('last_data_date') 
-        
-    return scaler, models, seq_len, features_cols, scaled_data, last_date
-
-try:
-    scaler, models, SEQ_LEN, features_cols, scaled_data, last_known_date = load_all_assets()
-    
-    # Ensure date is correctly formatted
-    if last_known_date is None:
-        last_known_date = pd.to_datetime('today').date()
-    elif not isinstance(last_known_date, pd.Timestamp) and not isinstance(last_known_date, pd.DatetimeIndex):
-        last_known_date = pd.to_datetime(last_known_date).date()
-        
-    st.success(f"Models and data loaded. Last known data point: {last_known_date.strftime('%Y-%m-%d')}")
-    
-except Exception as e:
-    st.error(f"Error during asset loading: {e}")
-    st.info("The model failed to load. Please ensure all model files and metadata are present and try updating TensorFlow/Keras versions.")
-    st.stop()
-
-# ==========================================
-# 3. PREDICTION UTILITY FUNCTIONS (FIXED RESHAPE LOGIC)
-# ==========================================
-def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_cols):
-    
-    # 1. Get the last sequence from the loaded data (using a copy)
-    temp_input = list(initial_scaled_data[-seq_len:].copy()) 
-    lst_output = []
-    i = 0
-    
-    # 2. Find the index of the 'Close' price target
-    target_index = features_cols.index('Close')
-        
-    # 3. Predict day by day (Roll Forward)
-    while i < n_days:
-        
-        # --- FIX 2: Always take the last SEQ_LEN elements for the input sequence ---
-        # This prevents the ValueError by guaranteeing the size of the array before reshaping.
-        current_sequence = np.array(temp_input[-seq_len:]) 
-        
-        # Reshape for the RNN model (1, seq_len, n_features)
-        x_input = current_sequence.reshape(1, seq_len, len(features_cols))
-        
-        # Predict the next CLOSE price (which is scaled)
-        y_pred_scaled = model.predict(x_input, verbose=0)[0] 
-        lst_output.append(y_pred_scaled[0])
-        
-        # --- Update the sequence for the next prediction ---
-        next_feature_vector = temp_input[-1].copy()
-        next_feature_vector[target_index] = y_pred_scaled[0]
-        temp_input.append(next_feature_vector)
-        i += 1
-        
-    # 4. Inverse transform the predicted 'Close' prices
-    prediction_dummy = np.zeros((n_days, len(features_cols)))
-    prediction_dummy[:, target_index] = lst_output
-    
-    inversed_prediction_data = scaler.inverse_transform(prediction_dummy)
-    final_predictions = inversed_prediction_data[:, target_index]
-    
-    return final_predictions.tolist()
-
-# ==========================================
-# 4. STREAMLIT UI
-# ==========================================
-st.title("📈 Apple Stock Price Prediction with RNNs")
-st.markdown("Compare predictions from SimpleRNN, LSTM, and GRU models for the next few trading days.")
-
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Prediction Settings")
-    model_choice = st.selectbox("Select Model:", list(models.keys()))
-    n_days = st.slider("Days to Predict Forward:", min_value=1, max_value=30, value=7)
-    
-    # Display key model parameters
-    st.markdown("---")
-    st.subheader("Model Parameters")
-    st.metric("Sequence Length (Time Steps)", SEQ_LEN)
-    st.metric("Number of Input Features", len(features_cols))
-    st.info(f"The model uses the past **{SEQ_LEN} days** of data to predict the next day's Close price.")
-
-# --- MAIN DASHBOARD ---
-model_to_use = models[model_choice]
-
-if st.button(f"Generate Prediction for Next {n_days} Days ({model_choice})", type="primary"):
-    
-    st.subheader(f"Results for **{model_choice}** Model")
-    
-    with st.spinner(f"Predicting next {n_days} days..."):
-        # Generate predictions
-        predicted_prices = predict_next_n_days(
-            model_to_use, n_days, scaled_data, SEQ_LEN, features_cols
-        )
-        
-        # Generate prediction dates (starting one day after the last known date)
-        prediction_dates = [last_known_date + timedelta(days=i + 1) for i in range(n_days)]
-        
-        predictions_df = pd.DataFrame({
-            'Date': prediction_dates,
-            'Predicted Close Price (USD)': predicted_prices
-        })
-        
-        # Display results
-        col_table, col_chart = st.columns([1, 2])
-        
-        with col_table:
-            st.markdown("#### **Forecast Table**")
-            st.dataframe(predictions_df.style.format({'Predicted Close Price (USD)': '${:,.2f}'}), height=250)
+            st.success(f"✅ Data successfully transformed with a sequence length of **{seq_len}**!")
             
-        with col_chart:
-            st.markdown("#### **Forecast Chart**")
-            st.line_chart(predictions_df.set_index('Date'))
+            st.subheader("2. Transformed Data Summary")
             
-            # Show conceptual diagram of the chosen RNN architecture
-            if model_choice == 'GRU':
-                st.info("The GRU uses a **Reset** and an **Update Gate** to efficiently manage information flow.") 
-            elif model_choice == 'LSTM':
-                 st.info("The LSTM uses **Input, Forget, and Output Gates** to combat the vanishing gradient problem.") 
-            elif model_choice == 'RNN':
-                 st.info("The Simple RNN processes sequences but often suffers from **short-term memory**.") 
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.info("**Feature Data (X)**")
+                st.write(f"**Shape:** `{X.shape}`")
+                st.markdown(
+                    """
+                    This 3D array is structured as:
+                    * **Dimension 1:** Number of Samples ($\text{N}$)
+                    * **Dimension 2:** Sequence Length ($\text{seq\_len}$)
+                    * **Dimension 3:** Number of Input Features ($\text{N}_{\text{features}} - 1$)
+                    """
+                )
+            
+            with col2:
+                st.info("**Target Data (y)**")
+                st.write(f"**Shape:** `{y.shape}`")
+                st.markdown(
+                    """
+                    This 1D array contains the target value corresponding to the prediction *after* each sequence.
+                    """
+                )
 
-        st.balloons()
+            st.subheader("3. Preview of the First Sample ($X[0]$ and $y[0]$)")
+            
+            st.code(f"X[0] (The historical sequence):", language='text')
+            st.dataframe(pd.DataFrame(X[0], columns=df.columns[:-1]))
+            
+            st.code(f"y[0] (The target value):", language='text')
+            st.write(y[0])
+            
+            st.markdown(
+                f"**Interpretation:** The model will learn to predict the value **{y[0]}** using the historical sequence data shown above."
+            )
+            
+            # Button to display the full datasets (optional, for larger data might be slow)
+            if st.checkbox("Show Full X and y Arrays (Use with Caution for Large Datasets)"):
+                st.subheader("Full X Array")
+                # Showing X is tricky in 3D, let's show the flattened 2D for simplicity
+                st.dataframe(pd.DataFrame(X.reshape(X.shape[0], -1)))
+                
+                st.subheader("Full y Array")
+                st.dataframe(pd.DataFrame(y, columns=[df.columns[-1] + ' (Target)']))
+                
+    except Exception as e:
+        st.error(f"An error occurred during file processing: {e}")
+
+else:
+    st.info("""
+        **How to use:**
+        1.  Adjust the **Sequence Length** in the sidebar.
+        2.  **Upload a CSV file** (make sure the column you want to predict is the last one).
+        3.  The tool will process your data and show the shapes and a sample of the resulting $X$ and $y$ arrays.
+    """)
