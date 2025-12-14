@@ -8,5 +8,6 @@ joblib
 matplotlib
 kaggle
 seaborn
+kagglehub
 
 
