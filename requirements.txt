@@ -6,6 +6,7 @@ scikit-learn
 nltk # Still included just in case
 joblib
 matplotlib
-kagglehub 
+kaggle
 seaborn
+
 
