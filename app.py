@@ -1,204 +1,129 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import matplotlib.pyplot as plt
+import os
 import seaborn as sns
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split # Used for splitting sequences
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-
-# --- Define the URL for the raw CSV data (Verified public source) ---
-DATA_URL = "https://raw.githubusercontent.com/mwitiderrick/stockmarket/master/AAPL.csv" 
 
 # ==========================================
 # 1. SETUP & CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Apple Stock Data Analyzer & LSTM Model", 
-    page_icon="🍎",
-    layout="wide"
+    page_title="RNN Model Performance Comparison",
+    layout="wide",
+    page_icon="🏆"
 )
 
-# --- Core Sequence Data Preprocessing Function ---
-def prepare_sequence_data(data_array: np.ndarray, seq_len: int):
-    """
-    Transforms a 2D numpy array into sequence data (X) and a target (y).
-    X shape: (N_samples, seq_len, N_features - 1)
-    y shape: (N_samples,)
-    """
-    X, y = [], []
-    n_samples = len(data_array)
-    
-    if data_array.shape[1] < 2:
-        # This will only happen if the data is only one column, which is unlikely for stock data
-        return np.array([]), np.array([])
-
-    for i in range(seq_len, n_samples):
-        # X: historical data (i-seq_len to i), excluding the last (target) column
-        X.append(data_array[i-seq_len:i, :-1]) 
-        # y: the target value at index i (the last column)
-        y.append(data_array[i, -1]) 
-    
-    if not X:
-        return np.array([]), np.array([])
-        
-    return np.array(X), np.array(y)
-
+RESULTS_FILE = "comparison_results.csv"
 
 # ==========================================
-# 2. DATA LOADING & SCALING
+# 2. DATA LOADING
 # ==========================================
 @st.cache_data
-def load_and_scale_data(data_url):
-    """
-    Loads data directly from a URL, cleans it, and applies MinMaxScaler.
-    """
-    st.info(f"Attempting to load data from public URL: **{data_url}**")
-    try:
-        df = pd.read_csv(data_url)
-        
-        # Basic cleaning and date parsing
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-            df.sort_index(inplace=True)
-            
-        # Ensure only numeric data remains
-        df_numeric = df.select_dtypes(include=np.number)
-        
-        if df_numeric.empty:
-            st.error("The loaded data frame is empty after dropping non-numeric columns.")
-            return None, None
-            
-        # --- Data Scaling ---
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        # Fit the scaler to all numeric data and transform
-        scaled_data = scaler.fit_transform(df_numeric)
-        
-        # Convert back to DataFrame
-        df_scaled = pd.DataFrame(scaled_data, columns=df_numeric.columns, index=df_numeric.index)
-        
-        st.success("🍎 Data loaded, cleaned, and scaled successfully!")
-        return df_scaled, scaler
+def load_comparison_data(file_path):
+    """Loads the pre-calculated performance results."""
+    if not os.path.exists(file_path):
+        st.error(f"Missing results file: {file_path}. Please run the export script in the notebook.")
+        st.stop()
+        return pd.DataFrame()
     
-    except Exception as e:
-        st.error(f"Error loading data from URL or processing file: {e}")
-        return None, None
+    df = pd.read_csv(file_path)
+    return df
+
+comparison_df = load_comparison_data(RESULTS_FILE)
 
 # ==========================================
-# 3. LSTM MODEL BUILD & TRAIN
-# ==========================================
-def build_and_train_model(X_train, y_train, units=50, dropout=0.2, epochs=50, batch_size=32):
-    """
-    Builds and trains a simple LSTM model.
-    """
-    # X_train shape is (N_samples, seq_len, N_features). N_features is the last dimension.
-    n_features = X_train.shape[2] 
-    seq_len = X_train.shape[1]
-    
-    # 1. Build the model
-    model = Sequential([
-        LSTM(units=units, return_sequences=True, input_shape=(seq_len, n_features)),
-        Dropout(dropout),
-        LSTM(units=units),
-        Dropout(dropout),
-        Dense(1) # Output layer for a single prediction (the next 'Close' price)
-    ])
-
-    # 2. Compile the model
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    
-    st.subheader("LSTM Model Architecture")
-    st.text(model.summary())
-    
-    # 3. Train the model
-    with st.spinner("Training LSTM model... this may take a moment."):
-        history = model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_split=0.1, # Use 10% of the training data for validation
-            verbose=0 # Suppress verbose output in Streamlit
-        )
-    st.success("🎉 LSTM Model Training Complete!")
-    return model, history
-
-
-# ==========================================
-# 4. STREAMLIT APP LAYOUT & LOGIC
+# 3. UI LAYOUT
 # ==========================================
 
-# --- Load Data and Scaler ---
-df_scaled, scaler = load_and_scale_data(DATA_URL)
+st.title("🏆 Apple Stock Prediction: Manual vs. Pipeline Performance")
+st.markdown("A comparison of the Mean Absolute Error (MAE) for different Recurrent Neural Network (RNN) architectures using two distinct preprocessing approaches (Manual vs. Scikit-learn Pipeline).")
 
-if df_scaled is None or df_scaled.empty:
-    st.warning("Could not load and process data. Check the data source.")
+if comparison_df.empty:
+    st.warning("Cannot display results as the comparison data failed to load.")
 else:
-    # --- Sidebar Configuration ---
-    st.sidebar.header("Configuration")
     
-    # Sequence Length Input
-    max_seq_len = len(df_scaled) - 1
-    seq_len = st.sidebar.slider(
-        "Sequence Length (Timesteps)",
-        min_value=1, max_value=min(max_seq_len, 30), value=10, step=1
+    # --- Performance Table ---
+    st.header("1. Performance Summary Table")
+    st.dataframe(
+        comparison_df.style.format({
+            "Manual MAE": "{:.4f}", 
+            "Pipeline MAE": "{:.4f}"
+        }),
+        use_container_width=True
     )
     
-    # Target Column Selection
-    target_column = st.sidebar.selectbox(
-        "Target Column (y)",
-        options=df_scaled.columns,
-        index=df_scaled.columns.get_loc('Close') if 'Close' in df_scaled.columns else 0
-    )
+    # --- Key Findings ---
+    st.markdown("---")
+    st.header("2. Methodology and Visualization")
     
-    # Model Hyperparameters
-    st.sidebar.subheader("Model Parameters")
-    train_ratio = st.sidebar.slider("Train Split (%)", 50, 90, 80, 5) / 100
-    epochs = st.sidebar.slider("Training Epochs", 5, 100, 25, 5)
-    
-    # --- Prepare Sequence Data (X, y) ---
-    feature_cols = [col for col in df_scaled.columns if col != target_column]
-    df_reordered = df_scaled[feature_cols + [target_column]]
-    data_array = df_reordered.values
-    
-    X, y = prepare_sequence_data(data_array, seq_len)
-    
-    if X.size > 0:
-        # --- Split Data into Train/Test ---
-        # NOTE: For time series, shuffle MUST be False to preserve chronological order
-        split_index = int(train_ratio * len(X))
-        X_train, X_test = X[:split_index], X[split_index:]
-        y_train, y_test = y[:split_index], y[split_index:]
-        
-        st.subheader("Data Split Summary")
-        col_x, col_y = st.columns(2)
-        col_x.metric("Training Samples (X_train)", X_train.shape[0])
-        col_y.metric("Testing Samples (X_test)", X_test.shape[0])
-        st.caption(f"Data split chronologically ({int(train_ratio*100)}% Train / {int((1-train_ratio)*100)}% Test)")
+    col_chart, col_text = st.columns([2, 1])
 
-        # --- Train Model ---
-        model, history = build_and_train_model(X_train, y_train, epochs=epochs)
+    with col_chart:
+        st.subheader("MAE Comparison Chart")
         
-        # --- Plot Training History ---
-        st.subheader("Training Loss History")
-        fig_loss, ax_loss = plt.subplots()
-        ax_loss.plot(history.history['loss'], label='Train Loss')
-        ax_loss.plot(history.history['val_loss'], label='Validation Loss')
-        ax_loss.set_title("Model Loss")
-        ax_loss.set_xlabel("Epoch")
-        ax_loss.set_ylabel("Mean Squared Error (MSE)")
-        ax_loss.legend()
-        st.pyplot(fig_loss)
+        # Recreate the comparison bar plot using Matplotlib
+        fig, ax = plt.subplots(figsize=(10, 6))
         
-        # --- Evaluation and Prediction Placeholder ---
-        st.header("5. Model Evaluation")
+        x = np.arange(len(comparison_df["Model"]))
+        width = 0.35
+
+        plt.bar(
+            x - width/2,
+            comparison_df["Manual MAE"],
+            width,
+            label="Manual Preprocessing",
+            color='#1f77b4'
+        )
+
+        plt.bar(
+            x + width/2,
+            comparison_df["Pipeline MAE"],
+            width,
+            label="End-to-End Pipeline",
+            color='#ff7f0e'
+        )
+
+        plt.xticks(x, comparison_df["Model"])
+        plt.ylabel("Mean Absolute Error (MAE)")
+        plt.title("Manual vs Pipeline Model Performance Comparison")
+        plt.legend()
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
         
-        # NOTE: The actual prediction and inverse transform logic is more complex 
-        # for a multi-variate model and would require an additional function.
-        st.info("The model is trained! The next steps would involve predicting on the test set, inverse transforming the predictions, and calculating metrics like RMSE.")
+        st.pyplot(fig) # Display the Matplotlib figure 
+
+    with col_text:
+        st.subheader("Analysis & Takeaways")
         
-    else:
-        st.error("Not enough data to create sequences with the current sequence length.")
+        # Find the best performing model/method
+        best_manual_mae = comparison_df["Manual MAE"].min()
+        best_pipeline_mae = comparison_df["Pipeline MAE"].min()
+        
+        if best_pipeline_mae < best_manual_mae:
+            best_model_row = comparison_df[comparison_df["Pipeline MAE"] == best_pipeline_mae].iloc[0]
+            st.success(f"**Best Performing Approach:** The **End-to-End Pipeline** yielded the lowest error, with the **{best_model_row['Model']}** achieving MAE of **{best_pipeline_mae:.4f}**.")
+        else:
+            best_model_row = comparison_df[comparison_df["Manual MAE"] == best_manual_mae].iloc[0]
+            st.success(f"**Best Performing Approach:** The **Manual Preprocessing** yielded the lowest error, with the **{best_model_row['Model']}** achieving MAE of **{best_manual_mae:.4f}**.")
+            
+        st.markdown(
+            """
+            ### Pipeline Advantage
+            The End-to-End Pipeline utilizes `ColumnTransformer` and `Pipeline` to encapsulate the scaling and transformation steps . This setup ensures that the exact same preprocessing logic is applied consistently during training and testing, which is often crucial for reproducible results in production environments.
+            
+            ### RNN Architecture Insight
+            * **SimpleRNN:** Prone to the vanishing gradient problem.
+            * **LSTM/GRU:** Both use gating mechanisms to manage information flow over long sequences, leading to better performance in time-series forecasting.
+            """
+        )
+
+### How to Run the GUI
+
+1.  **Ensure you ran Step 1** in your notebook to create `comparison_results.csv`.
+2.  Save the code above as `app.py`.
+3.  Open your terminal in the directory where you saved the file and run:
+    ```bash
+    streamlit run app.py
+    ```
+
+Would you like to extend this GUI to include a **Prediction Tab** where users can input a model and number of days to forecast, using the pipeline-trained model?
