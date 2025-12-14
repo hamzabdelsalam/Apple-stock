@@ -158,4 +158,15 @@ if PREDICTION_READY:
         # Display structural info about the chosen model type
         st.markdown("---")
         st.subheader(f"Understanding the {model_choice} Architecture")
-        if
+        if model_choice == 'GRU':
+            st.image('https://i.imgur.com/8Qj8n6T.png', caption='GRU Architecture', use_column_width=True) # 
+            st.markdown("The **GRU (Gated Recurrent Unit)** uses only two gates (**Update** and **Reset**) to manage information flow, offering a computationally more efficient alternative to LSTM while still addressing the vanishing gradient problem.")
+        elif model_choice == 'LSTM':
+            st.image('https://i.imgur.com/Gj3Hj7Z.png', caption='LSTM Architecture', use_column_width=True) # 
+            st.markdown("The **LSTM (Long Short-Term Memory)** utilizes three distinct gates (**Input, Forget, and Output**) to explicitly control which information is stored, forgotten, or passed to the next step, making it highly effective for time series with long-range dependencies.")
+        elif model_choice == 'RNN':
+            st.image('https://i.imgur.com/8Nf9rYd.png', caption='Simple RNN Architecture', use_column_width=True) # 
+            st.markdown("The **Simple RNN** uses a basic recurrent connection, which is computationally fast but often suffers from the **vanishing gradient problem**, making it less effective at learning patterns over long time sequences.")
+        
+else:
+    st.error("Prediction is disabled. Please ensure the necessary assets (`rnn_model.h5`, `lstm_model.h5`, `gru_model.h5`, `minmax_scaler.pkl`, `metadata.pkl`) are created by running the export script in your notebook.")
