@@ -29,14 +29,11 @@ MODEL_FILES = {
 }
 CUSTOM_OBJECTS = {'mse': 'mse', 'mae': 'mae'} # For Keras loading fix
 
-# ==========================================
-# 2. ASSET LOADING (Unified Function)
-# ==========================================
 
 @st.cache_resource
 def load_prediction_assets():
     """Loads all models, scaler, and metadata."""
-    st.write("Loading all models and data...")
+
     
     # 1. Check for required files
     required_files = list(MODEL_FILES.values()) + [SCALER_FILE, META_FILE, RESULTS_FILE]
@@ -105,9 +102,6 @@ def predict_next_n_days(model, n_days, initial_scaled_data, seq_len, features_co
     
     return final_predictions.tolist()
 
-# ==========================================
-# 4. STREAMLIT UI
-# ==========================================
 
 # --- Create Tabs ---
 tab1, tab2 = st.tabs(["📊 Performance Analysis", "🔮 Live Prediction"])
@@ -197,3 +191,4 @@ with tab2:
             st.info(f"The prediction starts one day after the last known data point: {LAST_KNOWN_DATE}")
 
         st.balloons()
+
